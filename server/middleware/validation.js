@@ -1,4 +1,5 @@
 const validator = require('validator');
+const { sendError } = require('../utils/responseHelper');
 
 // Validate URL
 const validateUrl = (url) => {
@@ -40,14 +41,14 @@ const validateCreateLink = (req, res, next) => {
   // Validate target URL
   const urlValidation = validateUrl(target_url);
   if (!urlValidation.valid) {
-    return res.status(400).json({ error: urlValidation.error });
+    return sendError(res, 400, urlValidation.error);
   }
 
   // If custom code provided, validate it
   if (code) {
     const codeValidation = validateCode(code);
     if (!codeValidation.valid) {
-      return res.status(400).json({ error: codeValidation.error });
+      return sendError(res, 400, codeValidation.error);
     }
   }
 
@@ -62,7 +63,7 @@ const validateCodeParam = (req, res, next) => {
   const codeValidation = validateCode(code);
   
   if (!codeValidation.valid) {
-    return res.status(400).json({ error: codeValidation.error });
+    return sendError(res, 400, codeValidation.error);
   }
 
   next();

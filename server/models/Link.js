@@ -27,6 +27,26 @@ class Link {
     return result.rows;
   }
 
+  // Get all links with pagination
+  static async findAllPaginated(page = 1, limit = 10) {
+    const offset = (page - 1) * limit;
+    
+    const query = `
+      SELECT * FROM links 
+      ORDER BY created_at DESC 
+      LIMIT $1 OFFSET $2
+    `;
+    const result = await pool.query(query, [limit, offset]);
+    return result.rows;
+  }
+
+  // Get total count of links
+  static async getTotalCount() {
+    const query = 'SELECT COUNT(*) as total FROM links';
+    const result = await pool.query(query);
+    return parseInt(result.rows[0].total);
+  }
+
   // Increment click count and update last clicked
   static async incrementClick(code) {
     const query = `

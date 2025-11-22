@@ -1,4 +1,5 @@
 const Link = require('../models/Link');
+const { sendSuccess, sendError, sendPaginated } = require('../utils/responseHelper');
 
 // Generate random code
 const generateRandomCode = () => {
@@ -27,28 +28,65 @@ const createLink = async (req, res, next) => {
         code = generateRandomCode();
         attempts++;
         if (attempts > 10) {
-          return res.status(500).json({ error: 'Failed to generate unique code' });
+          return sendError(res, 500, 'Failed to generate unique code');
         }
       } while (await Link.codeExists(code));
     } else {
       // Check if custom code already exists
       if (await Link.codeExists(code)) {
-        return res.status(409).json({ error: 'Code already exists' });
+        return sendError(res, 409, 'Code already exists');
       }
     }
 
     const link = await Link.create(code, validatedUrl);
-    res.status(201).json(link);
+    return sendSuccess(res, 201, link, 'Link created successfully');
   } catch (error) {
     next(error);
   }
 };
 
-// Get all links
+// Get all links with optional pagination
 const getAllLinks = async (req, res, next) => {
   try {
-    const links = await Link.findAll();
-    res.json(links);
+    // Check if pagination parameters are provided
+    const hasPagination = req.query.page || req.query.limit;
+    
+    if (hasPagination) {
+      // Parse query parameters
+      const page = parseInt(req.query.page) || 1;
+      const limit = parseInt(req.query.limit) || 10;
+      
+      // Validate pagination parameters
+      if (page < 1) {
+        return sendError(res, 400, 'Page must be greater than 0');
+      }
+      if (limit < 1 || limit > 100) {
+        return sendError(res, 400, 'Limit must be between 1 and 100');
+      }
+
+      // Get paginated links and total count
+      const [links, total] = await Promise.all([
+        Link.findAllPaginated(page, limit),
+        Link.getTotalCount()
+      ]);
+
+      // Calculate pagination metadata
+      const totalPages = Math.ceil(total / limit);
+      const pagination = {
+        page,
+        limit,
+        total,
+        totalPages,
+        hasNext: page < totalPages,
+        hasPrev: page > 1
+      };
+
+      return sendPaginated(res, links, pagination);
+    } else {
+      // Return all links in simple array format (for automated testing compatibility)
+      const links = await Link.findAll();
+      return res.status(200).json(links);
+    }
   } catch (error) {
     next(error);
   }
@@ -61,10 +99,10 @@ const getLinkStats = async (req, res, next) => {
     const link = await Link.findByCode(code);
 
     if (!link) {
-      return res.status(404).json({ error: 'Link not found' });
+      return sendError(res, 404, 'Link not found');
     }
 
-    res.json(link);
+    return sendSuccess(res, 200, link, 'Link stats retrieved successfully');
   } catch (error) {
     next(error);
   }
@@ -77,10 +115,10 @@ const deleteLink = async (req, res, next) => {
     const link = await Link.deleteByCode(code);
 
     if (!link) {
-      return res.status(404).json({ error: 'Link not found' });
+      return sendError(res, 404, 'Link not found');
     }
 
-    res.json({ message: 'Link deleted successfully', link });
+    return sendSuccess(res, 200, link, 'Link deleted successfully');
   } catch (error) {
     next(error);
   }
