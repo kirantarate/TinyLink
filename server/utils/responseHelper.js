@@ -26,12 +26,27 @@ const sendPaginated = (res, data, pagination) => {
     status: 200,
     data,
     pagination: {
-      page: pagination.page,
+      ...(pagination.page !== undefined && {
+        page: pagination.page,
+        totalPages: pagination.totalPages
+      }),
+      ...(pagination.currentPage !== undefined && {
+        currentPage: pagination.currentPage,
+        totalPages: pagination.totalPages
+      }),
+      ...(pagination.start !== undefined && {
+        start: pagination.start,
+        nextStart: pagination.nextStart,
+        prevStart: pagination.prevStart
+      }),
       limit: pagination.limit,
       total: pagination.total,
-      totalPages: pagination.totalPages,
       hasNext: pagination.hasNext,
-      hasPrev: pagination.hasPrev
+      hasPrev: pagination.hasPrev,
+      ...(pagination.from !== undefined && {
+        from: pagination.from,
+        to: pagination.to
+      })
     }
   };
   return res.status(200).json(response);

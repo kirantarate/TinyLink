@@ -32,7 +32,7 @@ const createLink = async (req, res, next) => {
         }
       } while (await Link.codeExists(code));
     } else {
-      // Check if custom code already exists
+      // Check if custom code already exists (codes must be globally unique)
       if (await Link.codeExists(code)) {
         return sendError(res, 409, 'Code already exists');
       }
@@ -49,37 +49,117 @@ const createLink = async (req, res, next) => {
 const getAllLinks = async (req, res, next) => {
   try {
     // Check if pagination parameters are provided
-    const hasPagination = req.query.page || req.query.limit;
+    const hasPagination = req.query.page || req.query.limit || req.query.start !== undefined;
     
     if (hasPagination) {
-      // Parse query parameters
-      const page = parseInt(req.query.page) || 1;
       const limit = parseInt(req.query.limit) || 10;
       
-      // Validate pagination parameters
-      if (page < 1) {
-        return sendError(res, 400, 'Page must be greater than 0');
-      }
+      // Validate limit
       if (limit < 1 || limit > 100) {
         return sendError(res, 400, 'Limit must be between 1 and 100');
       }
 
-      // Get paginated links and total count
-      const [links, total] = await Promise.all([
-        Link.findAllPaginated(page, limit),
-        Link.getTotalCount()
-      ]);
+      let links, total, pagination;
 
-      // Calculate pagination metadata
-      const totalPages = Math.ceil(total / limit);
-      const pagination = {
-        page,
-        limit,
-        total,
-        totalPages,
-        hasNext: page < totalPages,
-        hasPrev: page > 1
-      };
+      if (req.query.start !== undefined) {
+        // Offset-based pagination (start parameter)
+        // First page: start=0 (entries 1-10)
+        // Second page: start=10 (entries 11-20)
+        // Third page: start=20 (entries 21-30)
+        const start = parseInt(req.query.start) || 0;
+        
+        if (start < 0) {
+          return sendError(res, 400, 'Start must be greater than or equal to 0');
+        }
+
+        // Get paginated links and total count
+        [links, total] = await Promise.all([
+          Link.findAllWithOffset(start, limit),
+          Link.getTotalCount()
+        ]);
+
+        // Calculate pagination metadata
+        const nextStart = start + limit;
+        const prevStart = start - limit;
+        const hasNext = nextStart < total;
+        const hasPrev = start > 0;
+        const currentPage = Math.floor(start / limit) + 1;
+        const totalPages = Math.ceil(total / limit);
+
+        pagination = {
+          start,
+          limit,
+          total,
+          currentPage,
+          totalPages,
+          nextStart: hasNext ? nextStart : null,
+          prevStart: hasPrev ? prevStart : null,
+          hasNext,
+          hasPrev,
+          // Entry range info
+          from: total > 0 ? start + 1 : 0,
+          to: Math.min(start + limit, total)
+        };
+      } else if (req.query.page) {
+        // Page-based pagination (page parameter)
+        // Page 1: entries 1-10 (start=0)
+        // Page 2: entries 11-20 (start=10)
+        const page = parseInt(req.query.page) || 1;
+        
+        if (page < 1) {
+          return sendError(res, 400, 'Page must be greater than 0');
+        }
+
+        const start = (page - 1) * limit;
+
+        // Get paginated links and total count
+        [links, total] = await Promise.all([
+          Link.findAllWithOffset(start, limit),
+          Link.getTotalCount()
+        ]);
+
+        // Calculate pagination metadata
+        const totalPages = Math.ceil(total / limit);
+        const nextStart = page < totalPages ? start + limit : null;
+        const prevStart = page > 1 ? start - limit : null;
+
+        pagination = {
+          page,
+          start,
+          limit,
+          total,
+          totalPages,
+          nextStart,
+          prevStart,
+          hasNext: page < totalPages,
+          hasPrev: page > 1,
+          // Entry range info
+          from: total > 0 ? start + 1 : 0,
+          to: Math.min(start + limit, total)
+        };
+      } else {
+        // Only limit provided, start from 0
+        const start = 0;
+        [links, total] = await Promise.all([
+          Link.findAllWithOffset(start, limit),
+          Link.getTotalCount()
+        ]);
+
+        const nextStart = limit < total ? limit : null;
+        pagination = {
+          start: 0,
+          limit,
+          total,
+          currentPage: 1,
+          totalPages: Math.ceil(total / limit),
+          nextStart,
+          prevStart: null,
+          hasNext: limit < total,
+          hasPrev: false,
+          from: total > 0 ? 1 : 0,
+          to: Math.min(limit, total)
+        };
+      }
 
       return sendPaginated(res, links, pagination);
     } else {
@@ -128,18 +208,45 @@ const deleteLink = async (req, res, next) => {
 const redirectLink = async (req, res, next) => {
   try {
     const { code } = req.params;
+    console.log(`[REDIRECT] Processing redirect for code: ${code}`);
+    
+    // Find link first
     const link = await Link.findByCode(code);
+    console.log(`[REDIRECT] Link found:`, link ? `ID: ${link.id}, URL: ${link.target_url}, Current clicks: ${link.total_clicks}` : 'NOT FOUND');
 
     if (!link) {
+      console.log(`[REDIRECT] Link not found for code: ${code}`);
       return res.status(404).json({ error: 'Link not found' });
     }
 
-    // Increment click count
-    await Link.incrementClick(code);
-
-    // Perform 302 redirect
-    res.redirect(302, link.target_url);
+    // CRITICAL: Increment click count BEFORE redirect
+    // Use await to ensure database update completes
+    console.log(`[REDIRECT] Attempting to increment click count for code: ${code}`);
+    const updatedLink = await Link.incrementClick(code);
+    
+    if (updatedLink) {
+      console.log(`[REDIRECT] Successfully updated - Code: ${code}, New count: ${updatedLink.total_clicks}, Last clicked: ${updatedLink.last_clicked}`);
+    } else {
+      console.error(`[REDIRECT] Failed to update click count for code: ${code}`);
+    }
+    
+    // Perform 302 redirect AFTER update completes
+    console.log(`[REDIRECT] Redirecting to: ${link.target_url}`);
+    return res.redirect(302, link.target_url);
   } catch (error) {
+    console.error('[REDIRECT] Error in redirectLink:', error);
+    console.error('[REDIRECT] Error stack:', error.stack);
+    // If error occurs, try to get link and redirect anyway
+    try {
+      const { code } = req.params;
+      const link = await Link.findByCode(code);
+      if (link && link.target_url) {
+        console.log(`[REDIRECT] Error occurred but redirecting anyway to: ${link.target_url}`);
+        return res.redirect(302, link.target_url);
+      }
+    } catch (err) {
+      console.error('[REDIRECT] Secondary error:', err);
+    }
     next(error);
   }
 };
